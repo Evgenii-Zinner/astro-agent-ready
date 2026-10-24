@@ -1,6 +1,6 @@
 {
   "name": "astro-agent-ready",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Zero-dependency Astro integration for AI agents and LLMs. Generates spec-compliant /llms.txt and /llms-full.txt, content collection discovery, and future WebMCP readiness.",
   "type": "module",
   "main": "./dist/index.cjs",
