@@ -37,6 +37,8 @@ export function scanSourceDirectory(
   const descField = source.descriptionField || 'description';
   const dateField = source.dateField || 'date';
   const tagField = source.tagField || 'tag';
+  const draftField = source.draftField || 'draft';
+  const excludeDrafts = source.excludeDrafts ?? true;
 
   for (const entry of entries) {
     if (!entry.isFile()) continue;
@@ -53,6 +55,11 @@ export function scanSourceDirectory(
     }
 
     const { metadata, body } = parseSourceFile(fullPath, rawContent);
+
+    // Exclude drafts if enabled (default: true)
+    if (excludeDrafts && (metadata[draftField] === true || metadata.draft === true)) {
+      continue;
+    }
 
     const baseName = entry.name.slice(0, -ext.length);
     const slug = `${urlPrefix}/${baseName}`;

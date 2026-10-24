@@ -130,6 +130,26 @@ export function parseAstroFile(content: string): ParsedFileContent {
       exportMatch = exportRegex.exec(frontmatterCode);
     }
 
+    // Match export const boolean exports: export const draft = true
+    const boolExportRegex =
+      /export\s+(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*(true|false)\s*(?:;|\r?\n|$)/g;
+    let boolMatch = boolExportRegex.exec(frontmatterCode);
+    while (boolMatch) {
+      const field = boolMatch[1];
+      metadata[field] = boolMatch[2] === 'true';
+      boolMatch = boolExportRegex.exec(frontmatterCode);
+    }
+
+    // Match export const number exports: export const order = 42
+    const numExportRegex =
+      /export\s+(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*(-?\d+(?:\.\d+)?)\s*(?:;|\r?\n|$)/g;
+    let numMatch = numExportRegex.exec(frontmatterCode);
+    while (numMatch) {
+      const field = numMatch[1];
+      metadata[field] = Number(numMatch[2]);
+      numMatch = numExportRegex.exec(frontmatterCode);
+    }
+
     // Match export const tags = [...] or array exports
     const arrayExportRegex = /export\s+(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*\[([\s\S]*?)\]/g;
     let arrayMatch = arrayExportRegex.exec(frontmatterCode);
@@ -148,8 +168,8 @@ export function parseAstroFile(content: string): ParsedFileContent {
   // Body is whatever is below the second ---
   let body = match ? content.slice(match[0].length).trim() : content.trim();
 
-  // Strip layout wrapper tags (e.g. <ArticleLayout ...> ... </ArticleLayout>) but keep content inside
-  body = body.replace(/<\/?(?:ArticleLayout|Layout|BaseLayout|MainLayout)[^>]*>/gi, '').trim();
+  // Strip layout wrapper tags (e.g. <ArticleLayout ...>, <BlogLayout>, <DefaultLayout>, <Layout ...>)
+  body = body.replace(/<\/?(?:[a-zA-Z0-9_$]+Layout|Layout)[^>]*>/gi, '').trim();
 
   return { metadata, body };
 }

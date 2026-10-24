@@ -54,6 +54,10 @@ export interface SourceConfig {
   dateField?: string;
   /** Frontmatter/export property name for tags/category (default: "tag", falls back to "tags") */
   tagField?: string;
+  /** Frontmatter/export property name for draft flag (default: "draft") */
+  draftField?: string;
+  /** Whether to automatically exclude draft documents (default: true) */
+  excludeDrafts?: boolean;
   /** Optional filter function to include/exclude specific documents */
   filter?: (doc: ContentDocument) => boolean;
   /** Sorting order for documents in this section (default: "date-desc") */
