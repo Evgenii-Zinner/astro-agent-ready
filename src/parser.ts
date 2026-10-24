@@ -186,7 +186,12 @@ export function parseAstroFile(content: string): ParsedFileContent {
   let body = block ? block.body : content.trim();
 
   // Strip layout wrapper tags (e.g. <ArticleLayout ...>, <BlogLayout>, <DefaultLayout>, <Layout ...>)
-  body = body.replace(/<\/?[a-zA-Z0-9_$]*Layout\b[^>]*>/gi, '').trim();
+  let previousBody: string;
+  do {
+    previousBody = body;
+    body = body.replace(/<\/?[a-zA-Z0-9_$]*Layout\b[^>]*>/gi, '');
+  } while (body !== previousBody);
+  body = body.trim();
 
   return { metadata, body };
 }
