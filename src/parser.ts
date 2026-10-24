@@ -86,24 +86,42 @@ export interface ParsedFileContent {
 }
 
 /**
+ * Extracts frontmatter block and body separated by `---` fences without ReDoS vulnerability.
+ */
+function extractFrontmatterBlock(content: string): { frontmatter: string; body: string } | null {
+  const trimmed = content.trimStart();
+  if (!trimmed.startsWith('---')) {
+    return null;
+  }
+
+  // Find closing --- that starts on its own line after opening fence
+  const closingMatch = trimmed.slice(3).match(/\r?\n---[ \t]*(?:\r?\n|$)/);
+  if (!closingMatch || closingMatch.index === undefined) {
+    return null;
+  }
+
+  const frontmatterEnd = 3 + closingMatch.index;
+  const frontmatter = trimmed.slice(3, frontmatterEnd);
+  const bodyStart = frontmatterEnd + closingMatch[0].length;
+  const body = trimmed.slice(bodyStart).trim();
+
+  return { frontmatter, body };
+}
+
+/**
  * Parses a Markdown or MDX file, extracting frontmatter and returning the clean body.
  */
 export function parseMarkdownFile(content: string): ParsedFileContent {
-  const frontmatterRegex = /^---\s*[\r\n]([\s\S]*?)[\r\n]---\s*[\r\n]?/;
-  const match = content.match(frontmatterRegex);
-
-  if (!match) {
+  const block = extractFrontmatterBlock(content);
+  if (!block) {
     return {
       metadata: {},
       body: content.trim(),
     };
   }
 
-  const yamlStr = match[1];
-  const body = content.slice(match[0].length).trim();
-  const metadata = parseYamlFrontmatter(yamlStr);
-
-  return { metadata, body };
+  const metadata = parseYamlFrontmatter(block.frontmatter);
+  return { metadata, body: block.body };
 }
 
 /**
@@ -111,27 +129,46 @@ export function parseMarkdownFile(content: string): ParsedFileContent {
  * and extracting the main body text/markdown below the frontmatter fence.
  */
 export function parseAstroFile(content: string): ParsedFileContent {
-  const fenceRegex = /^---\s*[\r\n]([\s\S]*?)[\r\n]---\s*[\r\n]?/;
-  const match = content.match(fenceRegex);
-
+  const block = extractFrontmatterBlock(content);
   const metadata: Record<string, unknown> = {};
 
-  if (match) {
-    const frontmatterCode = match[1];
+  if (block) {
+    const frontmatterCode = block.frontmatter;
 
-    // Match export const/let/var name = "value" or 'value' or `value`
-    const exportRegex =
-      /export\s+(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*[\r\n\s]*(["'`])([\s\S]*?)\2/g;
-    let exportMatch = exportRegex.exec(frontmatterCode);
-    while (exportMatch) {
-      const field = exportMatch[1];
-      const val = exportMatch[3].trim();
+    // Match export const/let/var name = "value" or 'value' or `value` with escape-safe patterns
+    const strExportRegex =
+      /export[ \t]+(?:const|let|var)[ \t]+([a-zA-Z0-9_$]+)[ \t]*=[ \t\r\n]*(?:'([^'\\]*(?:\\.[^'\\]*)*)'|"([^"\\]*(?:\\.[^"\\]*)*)"|`([^`\\]*(?:\\.[^`\\]*)*)`)/g;
+    let strMatch = strExportRegex.exec(frontmatterCode);
+    while (strMatch) {
+      const field = strMatch[1];
+      const val = (strMatch[2] ?? strMatch[3] ?? strMatch[4] ?? '').trim();
       metadata[field] = val;
-      exportMatch = exportRegex.exec(frontmatterCode);
+      strMatch = strExportRegex.exec(frontmatterCode);
     }
 
-    // Match export const tags = [...] or array exports
-    const arrayExportRegex = /export\s+(?:const|let|var)\s+([a-zA-Z0-9_$]+)\s*=\s*\[([\s\S]*?)\]/g;
+    // Match export const boolean exports: export const draft = true
+    const boolExportRegex =
+      /export[ \t]+(?:const|let|var)[ \t]+([a-zA-Z0-9_$]+)[ \t]*=[ \t\r\n]*(true|false)\b/g;
+    let boolMatch = boolExportRegex.exec(frontmatterCode);
+    while (boolMatch) {
+      const field = boolMatch[1];
+      metadata[field] = boolMatch[2] === 'true';
+      boolMatch = boolExportRegex.exec(frontmatterCode);
+    }
+
+    // Match export const number exports: export const order = 42
+    const numExportRegex =
+      /export[ \t]+(?:const|let|var)[ \t]+([a-zA-Z0-9_$]+)[ \t]*=[ \t\r\n]*(-?\d+(?:\.\d+)?)\b/g;
+    let numMatch = numExportRegex.exec(frontmatterCode);
+    while (numMatch) {
+      const field = numMatch[1];
+      metadata[field] = Number(numMatch[2]);
+      numMatch = numExportRegex.exec(frontmatterCode);
+    }
+
+    // Match export const tags = [...] or array exports (linear [^\]]*, no backtracking)
+    const arrayExportRegex =
+      /export[ \t]+(?:const|let|var)[ \t]+([a-zA-Z0-9_$]+)[ \t]*=[ \t\r\n]*\[([^\]]*)\]/g;
     let arrayMatch = arrayExportRegex.exec(frontmatterCode);
     while (arrayMatch) {
       const field = arrayMatch[1];
@@ -146,10 +183,15 @@ export function parseAstroFile(content: string): ParsedFileContent {
   }
 
   // Body is whatever is below the second ---
-  let body = match ? content.slice(match[0].length).trim() : content.trim();
+  let body = block ? block.body : content.trim();
 
-  // Strip layout wrapper tags (e.g. <ArticleLayout ...> ... </ArticleLayout>) but keep content inside
-  body = body.replace(/<\/?(?:ArticleLayout|Layout|BaseLayout|MainLayout)[^>]*>/gi, '').trim();
+  // Strip layout wrapper tags (e.g. <ArticleLayout ...>, <BlogLayout>, <DefaultLayout>, <Layout ...>)
+  let previousBody: string;
+  do {
+    previousBody = body;
+    body = body.replace(/<\/?[a-zA-Z0-9_$]*Layout\b[^>]*>/gi, '');
+  } while (body !== previousBody);
+  body = body.trim();
 
   return { metadata, body };
 }

@@ -94,11 +94,13 @@ export const description = "Astro article description";
 export const date = "2026-10-24";
 export const tag = "Systems";
 export const tags = ["Edge", "Astro"];
+export const draft = false;
+export const order = 5;
 ---
-<ArticleLayout title={title}>
+<BlogPostLayout title={title} order={order}>
   <h2>Main Section</h2>
   <p>This is the article content body.</p>
-</ArticleLayout>
+</BlogPostLayout>
 `;
       const parsed = parseAstroFile(content);
       expect(parsed.metadata.title).toBe('Astro Article Title');
@@ -106,8 +108,10 @@ export const tags = ["Edge", "Astro"];
       expect(parsed.metadata.date).toBe('2026-10-24');
       expect(parsed.metadata.tag).toBe('Systems');
       expect(parsed.metadata.tags).toEqual(['Edge', 'Astro']);
+      expect(parsed.metadata.draft).toBe(false);
+      expect(parsed.metadata.order).toBe(5);
       expect(parsed.body).toContain('<h2>Main Section</h2>');
-      expect(parsed.body).not.toContain('<ArticleLayout');
+      expect(parsed.body).not.toContain('<BlogPostLayout');
     });
 
     it('handles Astro files with backticks and multiline exports', () => {
@@ -240,6 +244,44 @@ Content of second post`,
       const titleDocs = scanSourceDirectory(titleSource, tempDir, 'https://example.com');
       expect(titleDocs[0].title).toBe('Alpha');
       expect(titleDocs[1].title).toBe('Beta');
+    });
+
+    it('automatically excludes drafts by default and allows opting in via excludeDrafts: false', () => {
+      const postsDir = path.join(tempDir, 'drafts-test');
+      fs.mkdirSync(postsDir);
+
+      fs.writeFileSync(
+        path.join(postsDir, 'published.md'),
+        '---\ntitle: "Published Post"\ndraft: false\n---\nBody',
+      );
+      fs.writeFileSync(
+        path.join(postsDir, 'wip.md'),
+        '---\ntitle: "WIP Post"\ndraft: true\n---\nBody',
+      );
+      fs.writeFileSync(
+        path.join(postsDir, 'astro-wip.astro'),
+        '---\nexport const title = "Astro WIP";\nexport const draft = true;\n---\nBody',
+      );
+
+      // Default: excludeDrafts is true
+      const defaultSource: SourceConfig = {
+        name: 'posts',
+        heading: 'Posts',
+        dir: 'drafts-test',
+      };
+      const filtered = scanSourceDirectory(defaultSource, tempDir, 'https://example.com');
+      expect(filtered).toHaveLength(1);
+      expect(filtered[0].title).toBe('Published Post');
+
+      // Opt in: excludeDrafts is false
+      const includeDraftsSource: SourceConfig = {
+        name: 'posts',
+        heading: 'Posts',
+        dir: 'drafts-test',
+        excludeDrafts: false,
+      };
+      const allDocs = scanSourceDirectory(includeDraftsSource, tempDir, 'https://example.com');
+      expect(allDocs).toHaveLength(3);
     });
 
     it('respects custom filters', () => {
