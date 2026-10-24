@@ -1,0 +1,72 @@
+{
+  "name": "astro-agent-ready",
+  "version": "0.1.0",
+  "description": "Zero-dependency Astro integration for AI agents and LLMs. Generates spec-compliant /llms.txt and /llms-full.txt, content collection discovery, and future WebMCP readiness.",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "lint": "biome check",
+    "lint:fix": "biome check --write",
+    "format": "biome format --write",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "npm run lint && npm run build && npm run test"
+  },
+  "keywords": [
+    "astro",
+    "astro-integration",
+    "withastro",
+    "llms-txt",
+    "llms",
+    "llm",
+    "ai",
+    "agents",
+    "agent-ready",
+    "webmcp",
+    "mcp"
+  ],
+  "author": "Evgenii Zinner",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Evgenii-Zinner/astro-agent-ready.git"
+  },
+  "homepage": "https://github.com/Evgenii-Zinner/astro-agent-ready#readme",
+  "bugs": {
+    "url": "https://github.com/Evgenii-Zinner/astro-agent-ready/issues"
+  },
+  "peerDependencies": {
+    "astro": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "astro": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/node": "^26.6.5",
+    "@vitest/coverage-v8": "^5.0.5",
+    "astro": "^7.4.0",
+    "tsup": "^9.0.0",
+    "typescript": "^5.7.3",
+    "vitest": "^5.0.5"
+  }
+}
