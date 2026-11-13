@@ -534,5 +534,492 @@ export const date = "2026-10-24";
     it('exports astroAgentReady as alias identical to default agentReady', () => {
       expect(astroAgentReady).toBe(agentReady);
     });
+
+    it('injects dynamic SSR route and virtual config when output is "server"', async () => {
+      interface VirtualPlugin {
+        name: string;
+        resolveId: (id: string) => string | undefined;
+        load: (id: string) => string | undefined;
+      }
+
+      let capturedPlugins: VirtualPlugin[] = [];
+      const updateConfig = (cfg: { vite?: { plugins?: VirtualPlugin[] } }) => {
+        capturedPlugins = cfg.vite?.plugins || [];
+      };
+      const injectRoute = vi.fn();
+      const addMiddleware = vi.fn();
+      const logger: AstroIntegrationLogger = {
+        options: { dest: { write: vi.fn() }, level: 'info' },
+        label: 'test',
+        fork: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      };
+
+      const integration = agentReady({
+        title: 'SSR Site',
+        description: 'Running on Workers',
+        corePages: [{ title: 'CV', path: '/cv' }],
+        ssr: {
+          sourcesModule: './src/lib/llms-sources.ts',
+          cacheControl: 'public, max-age=120',
+          full: true,
+        },
+      });
+
+      const setupHook = integration.hooks['astro:config:setup'] as (params: {
+        config: Partial<AstroConfig>;
+        updateConfig: typeof updateConfig;
+        injectRoute: typeof injectRoute;
+        addMiddleware: typeof addMiddleware;
+        logger: AstroIntegrationLogger;
+      }) => void;
+
+      setupHook({
+        config: {
+          root: pathToFileURL(tempDir),
+          site: 'https://ssr.example.com',
+          output: 'server',
+        },
+        updateConfig,
+        injectRoute,
+        addMiddleware,
+        logger,
+      });
+
+      expect(injectRoute).toHaveBeenCalledWith({
+        pattern: '/llms.txt',
+        entrypoint: 'astro-agent-ready/llms-route',
+      });
+      expect(injectRoute).toHaveBeenCalledWith({
+        pattern: '/llms-full.txt',
+        entrypoint: 'astro-agent-ready/llms-full-route',
+      });
+      expect(addMiddleware).toHaveBeenCalledWith({
+        entrypoint: 'astro-agent-ready/middleware',
+        order: 'pre',
+      });
+      expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('Detected SSR output mode'));
+
+      expect(capturedPlugins).toHaveLength(1);
+      const plugin = capturedPlugins[0];
+      expect(plugin.resolveId('virtual:astro-agent-ready/config')).toBe(
+        '\0virtual:astro-agent-ready/config',
+      );
+      expect(plugin.resolveId('unrelated-id')).toBeUndefined();
+
+      const loaded = plugin.load('\0virtual:astro-agent-ready/config');
+      expect(loaded).toContain('export const agentReadyOptions =');
+      expect(loaded).toContain('llms-sources.ts');
+      expect(loaded).toContain('export const dynamicSources =');
+      expect(plugin.load('unrelated-id')).toBeUndefined();
+
+      // Verify astro:build:done is a no-op in SSR mode
+      const distDir = path.join(tempDir, 'dist-ssr');
+      fs.mkdirSync(distDir, { recursive: true });
+      const buildDoneHook = integration.hooks['astro:build:done'] as (params: {
+        dir: URL;
+        logger: AstroIntegrationLogger;
+      }) => Promise<void>;
+
+      await buildDoneHook({
+        dir: pathToFileURL(`${distDir}/`),
+        logger,
+      });
+      expect(fs.existsSync(path.join(distDir, 'llms.txt'))).toBe(false);
+    });
+
+    it('supports ssr: false, ssr.enabled: false, and default empty dynamicSources', () => {
+      interface VirtualPlugin {
+        name: string;
+        resolveId: (id: string) => string | undefined;
+        load: (id: string) => string | undefined;
+      }
+
+      const injectRouteDisabled = vi.fn();
+      const logger: AstroIntegrationLogger = {
+        options: { dest: { write: vi.fn() }, level: 'info' },
+        label: 'test',
+        fork: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      };
+
+      const disabledIntegration = agentReady({
+        title: 'Disabled SSR',
+        description: 'No route',
+        ssr: { enabled: false },
+      });
+      const setupDisabled = disabledIntegration.hooks['astro:config:setup'] as (params: {
+        config: Partial<AstroConfig>;
+        updateConfig: () => void;
+        injectRoute: typeof injectRouteDisabled;
+        addMiddleware: () => void;
+        logger: AstroIntegrationLogger;
+      }) => void;
+      setupDisabled({
+        config: { output: 'server' },
+        updateConfig: vi.fn(),
+        injectRoute: injectRouteDisabled,
+        addMiddleware: vi.fn(),
+        logger,
+      });
+      expect(injectRouteDisabled).not.toHaveBeenCalled();
+
+      const falseIntegration = agentReady({
+        title: 'False SSR',
+        description: 'No route',
+        ssr: false,
+      });
+      const setupFalse = falseIntegration.hooks['astro:config:setup'] as typeof setupDisabled;
+      setupFalse({
+        config: { output: 'server' },
+        updateConfig: vi.fn(),
+        injectRoute: injectRouteDisabled,
+        addMiddleware: vi.fn(),
+        logger,
+      });
+      expect(injectRouteDisabled).not.toHaveBeenCalled();
+
+      // Test SSR without sourcesModule (absolute path fallback not used)
+      let pluginsNoSources: VirtualPlugin[] = [];
+      const noSourcesIntegration = agentReady({
+        title: 'SSR No Sources',
+        description: 'Only core pages',
+      });
+      const setupNoSources = noSourcesIntegration.hooks['astro:config:setup'] as (params: {
+        config: Partial<AstroConfig>;
+        updateConfig: (cfg: { vite?: { plugins?: VirtualPlugin[] } }) => void;
+        injectRoute: typeof injectRouteDisabled;
+        addMiddleware: () => void;
+        logger: AstroIntegrationLogger;
+      }) => void;
+      setupNoSources({
+        config: { output: 'server' },
+        updateConfig: (cfg) => {
+          pluginsNoSources = cfg.vite?.plugins || [];
+        },
+        injectRoute: vi.fn(),
+        addMiddleware: vi.fn(),
+        logger,
+      });
+
+      const loaded = pluginsNoSources[0].load('\0virtual:astro-agent-ready/config');
+      expect(loaded).toContain('export const dynamicSources = [];');
+    });
+  });
+
+  describe('SSR Route Handler (ssr.ts & llms-route.ts)', () => {
+    it('creates an APIRoute handler that resolves dynamicSources and normalizes URLs', async () => {
+      const { createLlmsTxtRoute } = await import('../src/ssr.js');
+
+      const handler = createLlmsTxtRoute({
+        title: 'CMS Blog',
+        description: 'Powered by EmDash',
+        corePages: [{ title: 'About', path: '/about' }],
+        dynamicSources: [
+          {
+            name: 'articles',
+            heading: 'Articles',
+            load: async () => [
+              {
+                slug: '/articles/edge-csp',
+                url: '/articles/edge-csp',
+                title: 'Edge CSP',
+                description: 'Strict CSP on Cloudflare',
+                date: '2026-11-11',
+              },
+            ],
+          },
+        ],
+        ssr: {
+          cacheControl: 'public, max-age=600',
+          contentType: 'text/markdown; charset=utf-8',
+        },
+      });
+
+      const response = await handler({
+        url: new URL('https://blog.example.com/llms.txt'),
+        site: new URL('https://blog.example.com'),
+      } as Parameters<typeof handler>[0]);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Content-Type')).toBe('text/markdown; charset=utf-8');
+      expect(response.headers.get('Cache-Control')).toBe('public, max-age=600');
+
+      const text = await response.text();
+      expect(text).toContain('# CMS Blog');
+      expect(text).toContain('- [About](https://blog.example.com/about)');
+      expect(text).toContain('## Articles');
+      expect(text).toContain(
+        '- [Edge CSP](https://blog.example.com/articles/edge-csp): Strict CSP on Cloudflare (Published: 2026-11-11)',
+      );
+    });
+
+    it('falls back to request origin when siteUrl and context.site are omitted', async () => {
+      const { createLlmsTxtRoute } = await import('../src/ssr.js');
+
+      const handler = createLlmsTxtRoute({
+        title: 'Origin Fallback',
+        description: 'No site configured',
+        corePages: [{ title: 'Contact', path: '/contact' }],
+      });
+
+      const response = await handler({
+        url: new URL('https://origin.example.com/llms.txt'),
+      } as Parameters<typeof handler>[0]);
+
+      expect(response.headers.get('Content-Type')).toBe('text/plain; charset=utf-8');
+      expect(response.headers.get('Cache-Control')).toBe('public, max-age=300, s-maxage=3600');
+
+      const text = await response.text();
+      expect(text).toContain('- [Contact](https://origin.example.com/contact)');
+    });
+
+    it('executes llms-route GET entrypoint using virtual module config', async () => {
+      const { GET } = await import('../src/llms-route.js');
+
+      const response = await GET({
+        url: new URL('https://virtual.example.com/llms.txt'),
+      } as Parameters<typeof GET>[0]);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('Cache-Control')).toBe('public, max-age=60');
+
+      const text = await response.text();
+      expect(text).toContain('# Virtual SSR Site');
+      expect(text).toContain('- [About](https://virtual.example.com/about)');
+      expect(text).toContain(
+        '- [Hello SSR](https://virtual.example.com/posts/hello): Dynamic post',
+      );
+    });
+
+    it('supports full dynamic resolveContext(), ETag 304, and CDN-Cache-Control', async () => {
+      const { createLlmsTxtRoute } = await import('../src/ssr.js');
+
+      const handler = createLlmsTxtRoute({
+        resolveContext: async (siteUrl) => ({
+          title: 'Dynamic CMS Title',
+          description: 'Hydrated from DB',
+          corePages: [{ title: 'Pricing', path: '/pricing' }],
+          contact: { email: 'team@cms.dev' },
+          sources: [
+            {
+              heading: 'Guides',
+              docs: [
+                {
+                  slug: '/guides/start',
+                  url: `${siteUrl}/guides/start`,
+                  title: 'Getting Started',
+                  description: 'Quickstart guide',
+                },
+              ],
+            },
+          ],
+        }),
+        ssr: {
+          cdnCacheControl: 'max-age=7200',
+        },
+      });
+
+      const firstRes = await handler({
+        url: new URL('https://cms.dev/llms.txt'),
+        request: new Request('https://cms.dev/llms.txt'),
+      } as Parameters<typeof handler>[0]);
+
+      expect(firstRes.status).toBe(200);
+      expect(firstRes.headers.get('CDN-Cache-Control')).toBe('max-age=7200');
+      const etag = firstRes.headers.get('ETag');
+      expect(etag).toMatch(/^"[0-9a-f]{16}"$/);
+
+      const firstBody = await firstRes.text();
+      expect(firstBody).toContain('# Dynamic CMS Title');
+      expect(firstBody).toContain('> Hydrated from DB');
+      expect(firstBody).toContain('- [Pricing](https://cms.dev/pricing)');
+      expect(firstBody).toContain('- [Getting Started](https://cms.dev/guides/start)');
+      expect(firstBody).toContain('- **Email:** team@cms.dev');
+
+      // Conditional request with matching ETag returns 304 Not Modified
+      const secondRes = await handler({
+        url: new URL('https://cms.dev/llms.txt'),
+        request: new Request('https://cms.dev/llms.txt', {
+          headers: { 'if-none-match': etag ?? '' },
+        }),
+      } as Parameters<typeof handler>[0]);
+
+      expect(secondRes.status).toBe(304);
+      expect(await secondRes.text()).toBe('');
+    });
+
+    it('enforces maxDocs and maxTokens guardrails in createLlmsFullTxtRoute and llms-full-route', async () => {
+      const { createLlmsFullTxtRoute } = await import('../src/ssr.js');
+      const { GET: fullRouteGet } = await import('../src/llms-full-route.js');
+
+      const handler = createLlmsFullTxtRoute({
+        title: 'Bounded SSR',
+        description: 'Guardrail test',
+        dynamicSources: [
+          {
+            name: 'posts',
+            heading: 'Posts',
+            load: () => [
+              {
+                slug: '/p1',
+                url: '/p1',
+                title: 'Post 1',
+                body: 'Short body one.',
+              },
+              {
+                slug: '/p2',
+                url: '/p2',
+                title: 'Post 2',
+                body: 'A'.repeat(2000), // ~500 tokens, exceeds maxTokens: 50
+              },
+              {
+                slug: '/p3',
+                url: '/p3',
+                title: 'Post 3',
+                body: 'Should be skipped by maxDocs/maxTokens',
+              },
+            ],
+          },
+        ],
+        ssr: {
+          full: { enabled: true, maxDocs: 2, maxTokens: 50 },
+        },
+      });
+
+      const res = await handler({
+        url: new URL('https://bounded.dev/llms-full.txt'),
+        request: new Request('https://bounded.dev/llms-full.txt'),
+      } as Parameters<typeof handler>[0]);
+
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toContain('# Post 1');
+      expect(text).not.toContain('# Post 2');
+      expect(text).not.toContain('# Post 3');
+
+      // Test llms-full-route virtual entrypoint
+      const virtualFullRes = await fullRouteGet({
+        url: new URL('https://virtual.dev/llms-full.txt'),
+        request: new Request('https://virtual.dev/llms-full.txt'),
+      } as Parameters<typeof fullRouteGet>[0]);
+      expect(virtualFullRes.status).toBe(200);
+      expect(await virtualFullRes.text()).toContain('Full body for hello post');
+    });
+  });
+
+  describe('SSR Middleware (.md routes, Accept negotiation & discovery headers)', () => {
+    it('serves .md suffix routes and Accept: text/markdown negotiation with ETag/Vary', async () => {
+      const { createAgentReadyMiddleware } = await import('../src/middleware.js');
+
+      const middleware = createAgentReadyMiddleware({
+        resolveMarkdown: async (pathname) => {
+          if (pathname === '/articles/post-1') return '# Post 1\n\nClean markdown.';
+          if (pathname === '/') return '# Home\n\nWelcome.';
+          return null;
+        },
+      });
+
+      // 1. .md suffix route
+      const mdRes = await middleware(
+        {
+          url: new URL('https://example.com/articles/post-1.md'),
+          request: new Request('https://example.com/articles/post-1.md'),
+          locals: {},
+        },
+        async () => new Response('<html>HTML</html>', { headers: { 'content-type': 'text/html' } }),
+      );
+
+      expect(mdRes.status).toBe(200);
+      expect(mdRes.headers.get('Content-Type')).toBe('text/markdown; charset=utf-8');
+      expect(mdRes.headers.get('Vary')).toBe('Accept');
+      expect(mdRes.headers.get('ETag')).toBeTruthy();
+      expect(await mdRes.text()).toBe('# Post 1\n\nClean markdown.');
+
+      // 2. /index.md maps to /
+      const indexMdRes = await middleware(
+        {
+          url: new URL('https://example.com/index.md'),
+          request: new Request('https://example.com/index.md'),
+          locals: {},
+        },
+        async () => new Response('<html>Home</html>', { headers: { 'content-type': 'text/html' } }),
+      );
+      expect(await indexMdRes.text()).toBe('# Home\n\nWelcome.');
+
+      // 3. Accept: text/markdown content negotiation
+      const negotiatedRes = await middleware(
+        {
+          url: new URL('https://example.com/articles/post-1'),
+          request: new Request('https://example.com/articles/post-1', {
+            headers: { Accept: 'text/markdown, text/html;q=0.9' },
+          }),
+          locals: {},
+        },
+        async () => new Response('<html>HTML</html>', { headers: { 'content-type': 'text/html' } }),
+      );
+
+      expect(negotiatedRes.status).toBe(200);
+      expect(negotiatedRes.headers.get('Content-Type')).toBe('text/markdown; charset=utf-8');
+      expect(await negotiatedRes.text()).toBe('# Post 1\n\nClean markdown.');
+
+      // 4. Normal HTML request falls through and gets Link discovery + Vary: Accept headers
+      const htmlRes = await middleware(
+        {
+          url: new URL('https://example.com/articles/post-1'),
+          request: new Request('https://example.com/articles/post-1', {
+            headers: { Accept: 'text/html' },
+          }),
+          locals: {},
+        },
+        async () =>
+          new Response('<html><body>Hello</body></html>', {
+            headers: {
+              'content-type': 'text/html; charset=utf-8',
+              Link: '</feed.xml>; rel="alternate"',
+              Vary: 'Accept-Encoding',
+            },
+          }),
+      );
+
+      expect(htmlRes.headers.get('Link')).toBe(
+        '</feed.xml>; rel="alternate", </llms.txt>; rel="alternate"; type="text/markdown"',
+      );
+      expect(htmlRes.headers.get('Vary')).toBe('Accept-Encoding, Accept');
+
+      // 5. Unknown .md path falls through to next()
+      const notFoundRes = await middleware(
+        {
+          url: new URL('https://example.com/unknown.md'),
+          request: new Request('https://example.com/unknown.md'),
+          locals: {},
+        },
+        async () => new Response('Not Found', { status: 404 }),
+      );
+      expect(notFoundRes.status).toBe(404);
+    });
+
+    it('executes onRequest middleware entrypoint via virtual config', async () => {
+      const { onRequest } = await import('../src/middleware.js');
+
+      const mdRes = await onRequest(
+        {
+          url: new URL('https://virtual.example.com/posts/hello.md'),
+          request: new Request('https://virtual.example.com/posts/hello.md'),
+          locals: {},
+        },
+        async () => new Response('<html>Fallback</html>'),
+      );
+
+      expect(mdRes.status).toBe(200);
+      expect(mdRes.headers.get('Content-Type')).toBe('text/markdown; charset=utf-8');
+      expect(await mdRes.text()).toContain('# Hello SSR');
+    });
   });
 });

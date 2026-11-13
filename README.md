@@ -134,10 +134,108 @@ export default defineConfig({
         x: "@EvgeniiZinner",
       },
 
-      // 6. Build & Logging Options
+      // 6. SSR Mode (output: "server")
+      ssr: {
+        enabled: true, // Auto-injects dynamic /llms.txt route & agent middleware when output === "server"
+        sourcesModule: "./src/lib/llms.ts", // Module exporting resolveContext, dynamicSources, and/or resolveMarkdown
+        cacheControl: "public, max-age=300, s-maxage=3600",
+        // cdnCacheControl: "max-age=3600", // Optional CDN-Cache-Control header
+        etag: true, // ETag + 304 Not Modified support
+        markdownNegotiation: true, // Enables .md suffix routes & Accept: text/markdown negotiation
+        discoveryHeader: true, // Attaches Link: </llms.txt>; rel="alternate"; type="text/markdown" on HTML
+        full: {
+          enabled: false, // Enable bounded /llms-full.txt in SSR
+          maxDocs: 20,
+          maxTokens: 100000,
+        },
+      },
+
+      // 7. Build & Logging Options
       outputFileName: "llms.txt",
       logStats: true, // Logs token estimates & file sizes in build output
     }),
+  ],
+});
+```
+
+---
+
+## 4.1. SSR Mode & Dynamic CMS Integration
+
+When Astro runs with `output: "server"`, `astro-agent-ready` automatically registers:
+- `GET /llms.txt` (dynamic index with `ETag` / `304 Not Modified` and cache headers)
+- `GET /llms-full.txt` (optional, bounded by `maxDocs` and `maxTokens` so edge Workers never OOM)
+- Middleware handling `.md` suffix routes (`/articles/post.md`), `Accept: text/markdown` content negotiation (`Vary: Accept`), and `Link` discovery headers on HTML pages.
+
+### Option A: `ssr.sourcesModule` (Zero Hardcoded Config in `astro.config.mjs`)
+Export `resolveContext` (to hydrate `title`, `description`, `corePages`, `contact`, and `sources` from any CMS/DB) and/or `resolveMarkdown` (to serve clean Markdown for individual pages):
+
+```typescript
+// src/lib/llms.ts
+import type { AgentReadyContextResolver, AgentReadyMarkdownResolver } from "astro-agent-ready";
+import { getEmDashCollection, getEmDashEntry } from "emdash";
+
+export const resolveContext: AgentReadyContextResolver = async (siteUrl) => {
+  const { entries } = await getEmDashCollection("posts", {
+    orderBy: { published_at: "desc" },
+  });
+
+  return {
+    title: "My Blog",
+    description: "Dynamic SSR site.",
+    corePages: [{ title: "About", path: "/about" }],
+    sources: [
+      {
+        heading: "Technical Articles",
+        docs: entries.map((post) => ({
+          slug: `/articles/${post.data.slug}`,
+          url: `${siteUrl}/articles/${post.data.slug}`,
+          title: post.data.title,
+          description: post.data.excerpt,
+          date: post.data.publishedAt?.toISOString().split("T")[0],
+        })),
+      },
+    ],
+  };
+};
+
+export const resolveMarkdown: AgentReadyMarkdownResolver = async (pathname) => {
+  if (!pathname.startsWith("/articles/")) return null;
+  const slug = pathname.replace(/^\/articles\//, "");
+  const entry = await getEmDashEntry("posts", slug);
+  if (!entry) return null;
+  return `# ${entry.data.title}\n\n${entry.data.excerpt ?? ""}`;
+};
+```
+
+### Option B: Explicit `src/pages/llms.txt.ts` via `createLlmsTxtRoute`
+If you prefer explicit file-based routing, set `ssr: false` in `agentReady(...)` and export `GET` from `src/pages/llms.txt.ts`:
+
+```typescript
+// src/pages/llms.txt.ts
+import { createLlmsTxtRoute } from "astro-agent-ready";
+import { getEmDashCollection } from "emdash";
+
+export const GET = createLlmsTxtRoute({
+  title: "My Blog",
+  description: "SSR blog powered by EmDash.",
+  corePages: [{ title: "About", path: "/about" }],
+  dynamicSources: [
+    {
+      name: "articles",
+      heading: "Technical Articles",
+      load: async (siteUrl) => {
+        const { entries } = await getEmDashCollection("posts", {
+          orderBy: { published_at: "desc" },
+        });
+        return entries.map((post) => ({
+          slug: `/articles/${post.data.slug}`,
+          url: `${siteUrl}/articles/${post.data.slug}`,
+          title: post.data.title,
+          description: post.data.excerpt,
+        }));
+      },
+    },
   ],
 });
 ```

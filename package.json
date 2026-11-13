@@ -11,6 +11,21 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "require": "./dist/index.cjs"
+    },
+    "./llms-route": {
+      "types": "./dist/llms-route.d.ts",
+      "import": "./dist/llms-route.js",
+      "require": "./dist/llms-route.cjs"
+    },
+    "./llms-full-route": {
+      "types": "./dist/llms-full-route.d.ts",
+      "import": "./dist/llms-full-route.js",
+      "require": "./dist/llms-full-route.cjs"
+    },
+    "./middleware": {
+      "types": "./dist/middleware.d.ts",
+      "import": "./dist/middleware.js",
+      "require": "./dist/middleware.cjs"
     }
   },
   "files": [
