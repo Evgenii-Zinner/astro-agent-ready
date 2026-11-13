@@ -5,8 +5,11 @@
 
 ### Features
 
-* add SSR support with dynamic context, .md negotiation, ETag caching, and bounded llms-full ([ee1e3c3](https://github.com/Evgenii-Zinner/astro-agent-ready/commit/ee1e3c316e21f4f7d8256e22d60e2465068e8c70))
-* add SSR support with dynamic context, .md negotiation, ETag caching, and bounded llms-full ([809632c](https://github.com/Evgenii-Zinner/astro-agent-ready/commit/809632c23057819a95a65f9058343f8258a76820))
+* add SSR support (`output: "server"` / `"hybrid"`) ([#6](https://github.com/Evgenii-Zinner/astro-agent-ready/pull/6)) ([ee1e3c3](https://github.com/Evgenii-Zinner/astro-agent-ready/commit/ee1e3c316e21f4f7d8256e22d60e2465068e8c70)):
+  * dynamic `resolveContext()` option for runtime content loading
+  * `.md` suffix route rewriting and `Accept: text/markdown` content negotiation middleware
+  * bounded `/llms-full.txt` output via `maxDocs` and `maxTokens`
+  * synchronous FNV-1a `ETag` / `304 Not Modified` caching and `Link` discovery headers
 
 ## [0.1.1](https://github.com/Evgenii-Zinner/astro-agent-ready/compare/v0.1.0...v0.1.1) (2026-10-24)
 
