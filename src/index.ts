@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import type { AstroIntegration } from 'astro';
 import { generateLlmsFullTxt, generateLlmsTxt } from './formatter.js';
 import { scanSourceDirectory } from './scanner.js';
-import { resolveSsrFullSettings } from './ssr.js';
+import { resolveSsrFullSettings, trimLeadingSlashes } from './ssr.js';
 import { estimateTokenCount, formatTokens } from './tokens.js';
 import type {
   AgentReadyOptions,
@@ -124,8 +124,8 @@ export function agentReady(options: AgentReadyOptions): AstroIntegration {
 
         if (config.output === 'server' && ssrOpt !== false) {
           isSsrActive = true;
-          const outputFileName = (options.outputFileName || 'llms.txt').replace(/^\/+/, '');
-          const fullFileName = (options.fullFileName || 'llms-full.txt').replace(/^\/+/, '');
+          const outputFileName = trimLeadingSlashes(options.outputFileName || 'llms.txt');
+          const fullFileName = trimLeadingSlashes(options.fullFileName || 'llms-full.txt');
           const routePattern = `/${outputFileName}`;
           const fullRoutePattern = `/${fullFileName}`;
           const fullSettings = resolveSsrFullSettings(ssrOpt.full);

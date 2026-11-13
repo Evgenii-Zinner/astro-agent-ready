@@ -1,14 +1,12 @@
 import {
   buildCachedResponse,
   DEFAULT_CACHE_CONTROL,
+  loadVirtualAgentReadyOptions,
   resolveRequestSiteUrl,
   resolveSsrSettings,
+  trimLeadingSlashes,
 } from './ssr.js';
-import type {
-  AgentReadyMarkdownResolver,
-  AgentReadyOptions,
-  SsrAgentReadyOptions,
-} from './types.js';
+import type { AgentReadyOptions } from './types.js';
 
 const MARKDOWN_CONTENT_TYPE = 'text/markdown; charset=utf-8';
 
@@ -93,8 +91,8 @@ export function createAgentReadyMiddleware(
   const enableEtag = ssrSettings.etag ?? true;
   const markdownNegotiation = ssrSettings.markdownNegotiation ?? true;
   const discoveryHeader = ssrSettings.discoveryHeader ?? true;
-  const outputFileName = (options.outputFileName || 'llms.txt').replace(/^\/+/, '');
-  const fullFileName = (options.fullFileName || 'llms-full.txt').replace(/^\/+/, '');
+  const outputFileName = trimLeadingSlashes(options.outputFileName || 'llms.txt');
+  const fullFileName = trimLeadingSlashes(options.fullFileName || 'llms-full.txt');
   const llmsPath = `/${outputFileName}`;
   const llmsFullPath = `/${fullFileName}`;
   const resolveMarkdown = options.resolveMarkdown;
@@ -145,33 +143,19 @@ export function createAgentReadyMiddleware(
   };
 }
 
-interface VirtualConfigModule {
-  agentReadyOptions?: AgentReadyOptions;
-  ssrOptions?: SsrAgentReadyOptions;
-  resolveMarkdown?: AgentReadyMarkdownResolver;
-}
-
 let cachedMiddleware: AgentReadyMiddlewareHandler | null = null;
 
 /**
  * Standard Astro middleware entrypoint registered via `addMiddleware()`.
+ *
+ * @param context - Astro middleware request context.
+ * @param next - Next middleware/route handler in the chain.
+ * @returns HTTP response (Markdown on `.md`/`Accept: text/markdown`, or HTML with discovery headers).
  */
 export const onRequest: AgentReadyMiddlewareHandler = async (context, next) => {
   if (!cachedMiddleware) {
-    let config: VirtualConfigModule = {};
-    try {
-      config = await import('virtual:astro-agent-ready/config');
-    } catch {
-      // Virtual module not available
-    }
-
-    const baseOptions: AgentReadyOptions = config.agentReadyOptions ?? {};
-
-    cachedMiddleware = createAgentReadyMiddleware({
-      ...baseOptions,
-      ssr: config.ssrOptions ?? baseOptions.ssr,
-      resolveMarkdown: config.resolveMarkdown ?? baseOptions.resolveMarkdown,
-    });
+    const mergedOptions = await loadVirtualAgentReadyOptions();
+    cachedMiddleware = createAgentReadyMiddleware(mergedOptions);
   }
 
   return cachedMiddleware(context, next);

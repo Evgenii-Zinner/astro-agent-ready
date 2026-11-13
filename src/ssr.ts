@@ -2,8 +2,11 @@ import type { APIRoute } from 'astro';
 import { generateLlmsFullTxt, generateLlmsTxt, resolveUrl } from './formatter.js';
 import { estimateTokenCount } from './tokens.js';
 import type {
+  AgentReadyContextResolver,
+  AgentReadyMarkdownResolver,
   AgentReadyOptions,
   ContentDocument,
+  DynamicSourceConfig,
   LlmsSectionSource,
   SsrAgentReadyOptions,
   SsrFullTxtOptions,
@@ -13,6 +16,61 @@ export const DEFAULT_CACHE_CONTROL = 'public, max-age=300, s-maxage=3600';
 export const DEFAULT_CONTENT_TYPE = 'text/plain; charset=utf-8';
 export const DEFAULT_MAX_DOCS = 20;
 export const DEFAULT_MAX_TOKENS = 100_000;
+
+/**
+ * Shape of the build-time Vite virtual module `virtual:astro-agent-ready/config`.
+ */
+export interface VirtualConfigModule {
+  agentReadyOptions?: AgentReadyOptions;
+  ssrOptions?: SsrAgentReadyOptions;
+  dynamicSources?: DynamicSourceConfig[];
+  resolveContext?: AgentReadyContextResolver;
+  resolveMarkdown?: AgentReadyMarkdownResolver;
+}
+
+/**
+ * Lazily imports `virtual:astro-agent-ready/config` and merges it into `AgentReadyOptions`.
+ * Falls back to empty defaults when invoked outside a Vite/Astro build.
+ *
+ * @returns Merged `AgentReadyOptions` resolved from the virtual module.
+ */
+export async function loadVirtualAgentReadyOptions(): Promise<AgentReadyOptions> {
+  let config: VirtualConfigModule = {};
+  try {
+    config = await import('virtual:astro-agent-ready/config');
+  } catch {
+    // Virtual module not available outside Astro/Vite runtime
+  }
+
+  const baseOptions: AgentReadyOptions = config.agentReadyOptions ?? {};
+  return {
+    ...baseOptions,
+    ssr: config.ssrOptions ?? baseOptions.ssr,
+    dynamicSources: config.dynamicSources ?? baseOptions.dynamicSources,
+    resolveContext: config.resolveContext ?? baseOptions.resolveContext,
+    resolveMarkdown: config.resolveMarkdown ?? baseOptions.resolveMarkdown,
+  };
+}
+
+/**
+ * Creates a lazily initialized `APIRoute` backed by `virtual:astro-agent-ready/config`.
+ *
+ * @param createHandler - Route handler factory (`createLlmsTxtRoute` or `createLlmsFullTxtRoute`).
+ * @returns Memoized Astro `APIRoute` handler.
+ */
+export function createVirtualLlmsRoute(
+  createHandler: (options: AgentReadyOptions) => APIRoute,
+): APIRoute {
+  let cachedHandler: APIRoute | null = null;
+
+  return async (context) => {
+    if (!cachedHandler) {
+      const mergedOptions = await loadVirtualAgentReadyOptions();
+      cachedHandler = createHandler(mergedOptions);
+    }
+    return cachedHandler(context);
+  };
+}
 
 /**
  * Resolves SSR-specific configuration from `AgentReadyOptions.ssr`.
@@ -122,6 +180,28 @@ function normalizeDocumentUrls(docs: ContentDocument[], siteUrl: string): Conten
 }
 
 /**
+ * Trims all trailing `/` characters in linear O(N) time without polynomial regexes.
+ */
+export function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) {
+    end--;
+  }
+  return end < value.length ? value.slice(0, end) : value;
+}
+
+/**
+ * Trims all leading `/` characters in linear O(N) time without polynomial regexes.
+ */
+export function trimLeadingSlashes(value: string): string {
+  let start = 0;
+  while (start < value.length && value.charCodeAt(start) === 47) {
+    start++;
+  }
+  return start > 0 ? value.slice(start) : value;
+}
+
+/**
  * Resolves `siteUrl` from explicit options, Astro `context.site`, or `context.url.origin`.
  */
 export function resolveRequestSiteUrl(
@@ -129,9 +209,9 @@ export function resolveRequestSiteUrl(
   site: URL | undefined,
   url: URL | undefined,
 ): string {
-  const contextSite = site ? site.toString().replace(/\/+$/, '') : '';
+  const contextSite = site ? trimTrailingSlashes(site.toString()) : '';
   const requestOrigin = url?.origin || '';
-  return (explicitSiteUrl || contextSite || requestOrigin).replace(/\/+$/, '');
+  return trimTrailingSlashes(explicitSiteUrl || contextSite || requestOrigin);
 }
 
 /**
