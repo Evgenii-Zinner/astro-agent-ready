@@ -1,22 +1,105 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AstroConfig, AstroIntegration, AstroIntegrationLogger } from 'astro';
+import type { AstroIntegration } from 'astro';
 import { generateLlmsFullTxt, generateLlmsTxt } from './formatter.js';
 import { scanSourceDirectory } from './scanner.js';
+import { resolveSsrFullSettings, trimLeadingSlashes } from './ssr.js';
 import { estimateTokenCount, formatTokens } from './tokens.js';
-import type { AgentReadyOptions, ContentDocument, SourceConfig } from './types.js';
+import type {
+  AgentReadyOptions,
+  ContentDocument,
+  LlmsSectionSource,
+  SsrAgentReadyOptions,
+} from './types.js';
 
 export * from './formatter.js';
+export * from './middleware.js';
 export * from './parser.js';
 export * from './scanner.js';
+export * from './ssr.js';
 export * from './tokens.js';
 export * from './types.js';
 
+const VIRTUAL_CONFIG_ID = 'virtual:astro-agent-ready/config';
+const RESOLVED_VIRTUAL_CONFIG_ID = `\0${VIRTUAL_CONFIG_ID}`;
+
+/**
+ * Resolves the SSR configuration option, returning `false` when explicitly disabled.
+ */
+function resolveSsrOption(
+  option: boolean | SsrAgentReadyOptions | undefined,
+): SsrAgentReadyOptions | false {
+  if (option === false) return false;
+  if (typeof option === 'object' && option !== null) {
+    if (option.enabled === false) {
+      return false;
+    }
+    return option;
+  }
+  return {};
+}
+
+/**
+ * Builds the virtual module source code exposing serializable config and optional dynamic loaders.
+ */
+function buildVirtualConfigModule(
+  options: AgentReadyOptions,
+  ssrOpt: SsrAgentReadyOptions,
+  siteUrl: string,
+  projectRoot: string,
+): string {
+  const serializableOptions: Omit<
+    AgentReadyOptions,
+    'dynamicSources' | 'resolveContext' | 'resolveMarkdown' | 'sources'
+  > = {
+    siteUrl: siteUrl || undefined,
+    title: options.title,
+    description: options.description,
+    intro: options.intro,
+    corePages: options.corePages,
+    outputFileName: options.outputFileName,
+    fullFileName: options.fullFileName,
+    includeInFull: options.includeInFull,
+    contact: options.contact,
+    customFooter: options.customFooter,
+    logStats: options.logStats,
+  };
+
+  const lines: string[] = [
+    `export const agentReadyOptions = ${JSON.stringify(serializableOptions)};`,
+    `export const ssrOptions = ${JSON.stringify(ssrOpt)};`,
+  ];
+
+  if (ssrOpt.sourcesModule) {
+    const resolvedModulePath = path.isAbsolute(ssrOpt.sourcesModule)
+      ? ssrOpt.sourcesModule
+      : path.resolve(projectRoot, ssrOpt.sourcesModule);
+    lines.push(
+      `import * as userSourcesModule from ${JSON.stringify(resolvedModulePath)};`,
+      'export const dynamicSources = Array.isArray(userSourcesModule.default) ? userSourcesModule.default : (userSourcesModule.dynamicSources ?? []);',
+      'export const resolveContext = userSourcesModule.resolveContext ?? (typeof userSourcesModule.default === "function" ? userSourcesModule.default : undefined);',
+      'export const resolveMarkdown = userSourcesModule.resolveMarkdown;',
+    );
+  } else {
+    lines.push(
+      'export const dynamicSources = [];',
+      'export const resolveContext = undefined;',
+      'export const resolveMarkdown = undefined;',
+    );
+  }
+
+  return lines.join('\n');
+}
+
 /**
  * Creates the astro-agent-ready integration for Astro.
- * Automatically generates spec-compliant /llms.txt and /llms-full.txt files
- * from Content Collections, pages directories, and configured core pages.
+ *
+ * - **SSR Mode (`output: "server"`)**: Registers `/llms.txt` (and optionally bounded `/llms-full.txt`)
+ *   plus middleware for `.md` routes, `Accept: text/markdown` negotiation, `ETag`/cache headers,
+ *   and `Link` discovery headers.
+ * - **SSG Mode (`output: "static"`)**: Scans local content sources at build time
+ *   and emits `/llms.txt` (and optionally `/llms-full.txt`) into `dist/`.
  *
  * @param options - Configuration options for agent readiness.
  * @returns AstroIntegration object.
@@ -24,20 +107,86 @@ export * from './types.js';
 export function agentReady(options: AgentReadyOptions): AstroIntegration {
   let projectRoot = process.cwd();
   let resolvedSiteUrl = options.siteUrl || '';
+  let isSsrActive = false;
+
+  const ssrOpt = resolveSsrOption(options.ssr);
 
   return {
     name: 'astro-agent-ready',
     hooks: {
-      'astro:config:setup': ({ config }: { config: AstroConfig }) => {
+      'astro:config:setup': ({ config, updateConfig, injectRoute, addMiddleware, logger }) => {
         if (config.root) {
           projectRoot = fileURLToPath(config.root);
         }
         if (!resolvedSiteUrl && config.site) {
           resolvedSiteUrl = config.site;
         }
+
+        if (config.output === 'server' && ssrOpt !== false) {
+          isSsrActive = true;
+          const outputFileName = trimLeadingSlashes(options.outputFileName || 'llms.txt');
+          const fullFileName = trimLeadingSlashes(options.fullFileName || 'llms-full.txt');
+          const routePattern = `/${outputFileName}`;
+          const fullRoutePattern = `/${fullFileName}`;
+          const fullSettings = resolveSsrFullSettings(ssrOpt.full);
+
+          logger.info(
+            `[astro-agent-ready] Detected SSR output mode. Injecting dynamic ${routePattern} route.`,
+          );
+
+          updateConfig({
+            vite: {
+              plugins: [
+                {
+                  name: 'astro-agent-ready-virtual-config',
+                  resolveId(id: string) {
+                    if (id === VIRTUAL_CONFIG_ID) {
+                      return RESOLVED_VIRTUAL_CONFIG_ID;
+                    }
+                    return undefined;
+                  },
+                  load(id: string) {
+                    if (id === RESOLVED_VIRTUAL_CONFIG_ID) {
+                      return buildVirtualConfigModule(
+                        options,
+                        ssrOpt,
+                        resolvedSiteUrl,
+                        projectRoot,
+                      );
+                    }
+                    return undefined;
+                  },
+                },
+              ],
+            },
+          });
+
+          injectRoute({
+            pattern: routePattern,
+            entrypoint: 'astro-agent-ready/llms-route',
+          });
+
+          if (fullSettings.enabled) {
+            injectRoute({
+              pattern: fullRoutePattern,
+              entrypoint: 'astro-agent-ready/llms-full-route',
+            });
+          }
+
+          if (ssrOpt.sourcesModule || ssrOpt.discoveryHeader !== false) {
+            addMiddleware({
+              entrypoint: 'astro-agent-ready/middleware',
+              order: 'pre',
+            });
+          }
+        }
       },
 
-      'astro:build:done': async ({ dir, logger }: { dir: URL; logger: AstroIntegrationLogger }) => {
+      'astro:build:done': async ({ dir, logger }) => {
+        if (isSsrActive) {
+          return;
+        }
+
         const outDir = fileURLToPath(dir);
         const resolvedOptions: AgentReadyOptions = {
           ...options,
@@ -45,7 +194,7 @@ export function agentReady(options: AgentReadyOptions): AstroIntegration {
         };
 
         const sources = resolvedOptions.sources || [];
-        const sourceResults = new Map<SourceConfig, ContentDocument[]>();
+        const sourceResults = new Map<LlmsSectionSource, ContentDocument[]>();
 
         let totalDocsCount = 0;
 
@@ -71,7 +220,7 @@ export function agentReady(options: AgentReadyOptions): AstroIntegration {
           );
         }
 
-        // 2. Generate /llms-full.txt if enabled
+        // 2. Generate /llms-full.txt if enabled (SSG only)
         if (resolvedOptions.generateFull) {
           const fullFileName = resolvedOptions.fullFileName || 'llms-full.txt';
           const llmsFullContent = generateLlmsFullTxt(resolvedOptions, sourceResults);

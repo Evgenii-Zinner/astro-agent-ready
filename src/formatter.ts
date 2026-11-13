@@ -1,9 +1,14 @@
-import type { AgentReadyOptions, ContactConfig, ContentDocument, SourceConfig } from './types.js';
+import type {
+  AgentReadyOptions,
+  ContactConfig,
+  ContentDocument,
+  LlmsSectionSource,
+} from './types.js';
 
 /**
  * Normalizes a relative path into a fully qualified URL using siteUrl.
  */
-function resolveUrl(pathOrUrl: string, siteUrl: string): string {
+export function resolveUrl(pathOrUrl: string, siteUrl: string): string {
   if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) {
     return pathOrUrl;
   }
@@ -69,14 +74,18 @@ function formatContactSection(contact: ContactConfig | string[]): string {
  */
 export function generateLlmsTxt(
   options: AgentReadyOptions,
-  sourceResults: Map<SourceConfig, ContentDocument[]>,
+  sourceResults: Map<LlmsSectionSource, ContentDocument[]>,
 ): string {
   const siteUrl = options.siteUrl || '';
   const parts: string[] = [];
 
   // 1. Title & Description
-  parts.push(`# ${options.title.trim()}\n`);
-  parts.push(`> ${options.description.trim()}\n`);
+  const title = (options.title || 'Site').trim();
+  const description = (options.description || '').trim();
+  parts.push(`# ${title}\n`);
+  if (description) {
+    parts.push(`> ${description}\n`);
+  }
 
   // 2. Intro / Notes
   if (options.intro) {
@@ -147,15 +156,19 @@ export function generateLlmsTxt(
  */
 export function generateLlmsFullTxt(
   options: AgentReadyOptions,
-  sourceResults: Map<SourceConfig, ContentDocument[]>,
+  sourceResults: Map<LlmsSectionSource, ContentDocument[]>,
 ): string {
   const parts: string[] = [];
+  const title = (options.title || 'Site').trim();
+  const description = (options.description || '').trim();
 
   // Top-level document header
-  parts.push(`# ${options.title.trim()} — Full Content Context\n`);
-  parts.push(`> ${options.description.trim()}\n`);
+  parts.push(`# ${title} — Full Content Context\n`);
+  if (description) {
+    parts.push(`> ${description}\n`);
+  }
   parts.push(
-    `This file contains the concatenated full content of all documents from ${options.title.trim()}, optimized for ingestion by reasoning models and Large Language Models.\n`,
+    `This file contains the concatenated full content of all documents from ${title}, optimized for ingestion by reasoning models and Large Language Models.\n`,
   );
 
   const includeInFull = options.includeInFull;
